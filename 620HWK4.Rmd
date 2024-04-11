@@ -4,6 +4,8 @@ output: pdf_document
 date: "2024-04-08"
 ---
 
+Github: https://github.com/jacobvid/BIOSTAT620HWK4.git
+
 Problem 2a: 8 GLM regression analyses
 ```{r}
 library(readxl)
