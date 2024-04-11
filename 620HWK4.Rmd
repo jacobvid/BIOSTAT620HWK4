@@ -1,0 +1,299 @@
+---
+title: "BIOSTAT 620 HWK 4 Jacob Vidergar"
+output: pdf_document
+date: "2024-04-08"
+---
+
+Problem 2a: 8 GLM regression analyses
+```{r}
+library(readxl)
+library(dplyr)
+
+data <- read_excel("ScreenTime-hw3Q3.xlsx")
+other_cols <- read_excel("the rest of 620 data hwk 3.xlsx")
+
+data <- merge(data, other_cols, by = "pseudo_id")
+
+# Participants who received treatment B
+treatment_B_data <- filter(data, Treatment == "B")
+# Get IDs for users who received treatment B
+B_pseudo_ids <- unique(treatment_B_data$pseudo_id)
+
+perform_glm <- function(user_id) {
+  # Subset data for the current user
+  user_data <- filter(treatment_B_data, pseudo_id == user_id)
+  
+  # Lag-1 model
+  user_data$Yi.t.1 <- lag(user_data$Pickups, default = 0)
+  
+  # Xt: 1 for weekday, 0 for weekend
+  user_data$Xt <- ifelse(user_data$Day %in% c("Mo", "Tu", "We", "Th", "Fr"), 1, 0)
+  
+  # Bt: 1 for intervention B, 0 for baseline
+  user_data$Bt <- ifelse(user_data$Phase == "Treatment", 1, 0)
+  
+  # GLM model
+  model <- glm(Pickups ~ log(Yi.t.1) + Bt + Xt, data = user_data[-1, ], family = poisson)
+  
+  # Coefficients/SE
+  coefficients <- coef(summary(model))
+  
+  b0 <- coefficients[1, 1]
+  b0_se <- coefficients[1, 2]
+  b1 <- coefficients[2, 1]
+  b1_se <- coefficients[2, 2]
+  b2 <- coefficients[3, 1]
+  b2_se <- coefficients[3, 2]
+  b3 <- coefficients[4, 1]
+  b3_se <- coefficients[4, 2]
+  
+  # Create a data frame to return
+  result_df <- data.frame(User = user_id, 
+                          beta_0 = b0, 
+                          beta_0_se = b0_se, 
+                          beta_1 = b1, 
+                          beta_1_se = b1_se, 
+                          beta_2 = b2, 
+                          beta_2_se = b2_se, 
+                          beta_3 = b3, 
+                          beta_3_se = b3_se)
+  
+  return(result_df)
+}
+
+# Store GLM results (only people who received treatment B)
+results_list <- lapply(B_pseudo_ids, function(user_id) {
+  return(perform_glm(user_id))
+})
+
+# Combine results from the list into a data frame
+results <- do.call(rbind, results_list)
+
+print(results)
+
+```
+Problem 2b: Meta learning
+```{r}
+meta_learning <- function(results_list) {
+  results_df <- do.call(rbind, results_list)
+  
+  coefficients <- results_df[, grepl("^beta_", names(results_df))]
+  std_errors <- results_df[, grepl("_se$", names(results_df))]
+  
+  meta_estimates <- colMeans(coefficients)
+  
+  meta_std_errors <- sqrt(rowSums(std_errors^2)) / sqrt(nrow(results_df))
+  
+  meta_results <- data.frame(Parameter = names(meta_estimates),
+                             Meta_Estimate = meta_estimates,
+                             Meta_Std_Error = meta_std_errors,
+                             stringsAsFactors = FALSE)
+  
+  return(list(meta_results = meta_results, 
+              meta_estimates = meta_estimates, 
+              meta_std_errors = meta_std_errors))
+}
+
+meta_results <- meta_learning(results_list)
+
+meta_results_df <- meta_results$meta_results
+meta_estimates <- meta_results$meta_estimates
+meta_std_errors <- meta_results$meta_std_errors
+
+print(meta_results)
+
+```
+Problem 2c: Effective at alpha = 0.05?
+```{r}
+alpha <- 0.05
+z_values <- meta_estimates / meta_std_errors
+p_values <- 2 * pnorm(-abs(z_values))
+print(p_values)
+```
+There is not a significant relationship between intervention B and expected rate
+of pickups (p=6.878551e-01) at a level of 0.05. Therefore, we cannot say for sure
+if intervention B is effective or not.
+
+Problem 2d: 2 advantages and 2 disadvantages
+
+Advantages:
+1. works for nonlinear models
+2. summary stats always same type
+
+Disadvantages:
+1. homogeneous target model parameters assumption may be violated
+2. may not always achieve the same results as oracle data like federated learning does
+
+Problem 3a: Expanded meta learning
+```{r}
+# Filter data for Intervention A
+subset_data_A <- data %>% filter(Treatment == "A")
+
+# Extract variables for Intervention A
+Yi_t_A <- subset_data_A$Pickups
+Di_t_A <- subset_data_A$Tot.Scr.Time
+Xt_A <- ifelse(subset_data_A$Day %in% c("Mo", "Tu", "We", "Th", "Fr"), 1, 0) 
+At_A <- ifelse(subset_data_A$Phase == "Treatment", 1, 0)
+Sexi_A <- subset_data_A$sex
+Agei_A <- subset_data_A$age
+Petsi_A <- subset_data_A$pets
+Siblingsi_A <- subset_data_A$siblings
+lambdai_t_A <- subset_data_A$Pickups / subset_data_A$Tot.Scr.Time
+
+# Fit model for Intervention A
+suppressWarnings({
+  model_A <- glm(lambdai_t_A ~ log(Yi_t_A - 1) + At_A + Xt_A + Sexi_A + Agei_A + Petsi_A + Siblingsi_A,
+                 offset = log(Di_t_A), family = poisson) 
+  summary(model_A)
+})
+
+coefficients_A <- summary(model_A)$coefficients
+beta_0_A <- coefficients_A[1, 1] 
+beta_0_se_A <- coefficients_A[1, 2] 
+beta_1_A <- coefficients_A[2, 1] 
+beta_1_se_A <- coefficients_A[2, 2] 
+beta_2_A <- coefficients_A[3, 1]
+beta_2_se_A <- coefficients_A[3, 2]
+beta_3_A <- coefficients_A[4, 1]
+beta_3_se_A <- coefficients_A[4, 2]
+beta_4_A <- coefficients_A[5, 1]
+beta_4_se_A <- coefficients_A[5, 2]
+beta_5_A <- coefficients_A[6, 1]
+beta_5_se_A <- coefficients_A[6, 2]
+beta_6_A <- coefficients_A[7, 1]
+beta_6_se_A <- coefficients_A[7, 2]
+beta_7_A <- coefficients_A[8, 1] 
+beta_7_se_A <- coefficients_A[8, 2]
+
+summary_A <- data.frame(
+  beta = character(), 
+  estimate = numeric(), 
+  std_error = numeric(),
+  stringsAsFactors = FALSE
+)
+
+summary_A[1, ] <- c("beta_0_A", beta_0_A, beta_0_se_A)
+summary_A[2, ] <- c("beta_1_A", beta_1_A, beta_1_se_A)
+summary_A[3, ] <- c("beta_2_A", beta_2_A, beta_2_se_A)
+summary_A[4, ] <- c("beta_3_A", beta_3_A, beta_3_se_A)
+summary_A[5, ] <- c("beta_4_A", beta_4_A, beta_4_se_A)
+summary_A[6, ] <- c("beta_5_A", beta_5_A, beta_5_se_A)
+summary_A[7, ] <- c("beta_6_A", beta_6_A, beta_6_se_A)
+summary_A[8, ] <- c("beta_7_A", beta_7_A, beta_7_se_A)
+
+
+print(summary_A)
+
+# Filter data for Intervention B
+subset_data_B <- data %>% filter(Treatment == "B")
+
+# Extract variables for Intervention B
+Yi_t_B <- subset_data_B$Pickups
+Di_t_B <- subset_data_B$Tot.Scr.Time
+Xt_B <- ifelse(subset_data_B$Day %in% c("Mo", "Tu", "We", "Th", "Fr"), 1, 0) 
+Bt_B <- ifelse(subset_data_B$Phase == "Treatment", 1, 0)
+Sexi_B <- subset_data_B$sex
+Agei_B <- subset_data_B$age
+Petsi_B <- subset_data_B$pets
+Siblingsi_B <- subset_data_B$siblings
+lambdai_t_B <- subset_data_B$Pickups / subset_data_B$Tot.Scr.Time
+
+# Fit model for Intervention B
+suppressWarnings({
+  model_B <- glm(lambdai_t_B ~ log(Yi_t_B - 1) + Bt_B + Xt_B + Sexi_B + Agei_B + Petsi_B + Siblingsi_B,
+                 offset = log(Di_t_B), family = poisson) 
+  summary(model_B)
+})
+
+coefficients_B <- summary(model_B)$coefficients
+beta_0_B <- coefficients_B[1, 1] 
+beta_0_se_B <- coefficients_B[1, 2] 
+beta_1_B <- coefficients_B[2, 1] 
+beta_1_se_B <- coefficients_B[2, 2] 
+beta_2_B <- coefficients_B[3, 1]
+beta_2_se_B <- coefficients_B[3, 2]
+beta_3_B <- coefficients_B[4, 1]
+beta_3_se_B <- coefficients_B[4, 2]
+beta_4_B <- coefficients_B[5, 1]
+beta_4_se_B <- coefficients_B[5, 2]
+beta_5_B <- coefficients_B[6, 1]
+beta_5_se_B <- coefficients_B[6, 2]
+beta_6_B <- coefficients_B[7, 1]
+beta_6_se_B <- coefficients_B[7, 2]
+beta_7_B <- coefficients_B[8, 1] 
+beta_7_se_B <- coefficients_B[8, 2]
+
+summary_B <- data.frame(
+  beta = character(), 
+  estimate = numeric(), 
+  std_error = numeric(),
+  stringsAsFactors = FALSE
+)
+
+summary_B[1, ] <- c("beta_0_B", beta_0_B, beta_0_se_B)
+summary_B[2, ] <- c("beta_1_B", beta_1_B, beta_1_se_B)
+summary_B[3, ] <- c("beta_2_B", beta_2_B, beta_2_se_B)
+summary_B[4, ] <- c("beta_3_B", beta_3_B, beta_3_se_B)
+summary_B[5, ] <- c("beta_4_B", beta_4_B, beta_4_se_B)
+summary_B[6, ] <- c("beta_5_B", beta_5_B, beta_5_se_B)
+summary_B[7, ] <- c("beta_6_B", beta_6_B, beta_6_se_B)
+summary_B[8, ] <- c("beta_7_B", beta_7_B, beta_7_se_B)
+
+
+print(summary_B)
+
+
+# Meta-estimates for A
+meta_estimate_A <- weighted.mean(c(beta_1_A, beta_2_A, beta_3_A, beta_4_A, beta_5_A, beta_6_A, beta_7_A), 
+                                  c(1/beta_1_se_A^2, 1/beta_2_se_A^2, 1/beta_3_se_A^2, 1/beta_4_se_A^2, 1/beta_5_se_A^2, 1/beta_6_se_A^2, 1/beta_7_se_A^2))
+
+meta_std_error_A <- sqrt(1/sum(1/c(beta_1_se_A^2, beta_2_se_A^2, beta_3_se_A^2, beta_4_se_A^2, beta_5_se_A^2, beta_6_se_A^2, beta_7_se_A^2)))
+
+# Meta-estimates for B
+meta_estimate_B <- weighted.mean(c(beta_1_B, beta_2_B, beta_3_B, beta_4_B, beta_5_B, beta_6_B, beta_7_B), 
+                                  c(1/beta_1_se_B^2, 1/beta_2_se_B^2, 1/beta_3_se_B^2, 1/beta_4_se_B^2, 1/beta_5_se_B^2, 1/beta_6_se_B^2, 1/beta_7_se_B^2))
+
+meta_std_error_B <- sqrt(1/sum(1/c(beta_1_se_B^2, beta_2_se_B^2, beta_3_se_B^2, beta_4_se_B^2, beta_5_se_B^2, beta_6_se_B^2, beta_7_se_B^2)))
+
+
+
+
+```
+Problem 3b: Received intervention?
+```{r}
+# Calculate the Z-score for group A
+Z_A <- meta_estimate_A / meta_std_error_A
+
+# Calculate the Z-score for group B
+Z_B <- meta_estimate_B / meta_std_error_B
+
+# Critical value for a two-tailed test at alpha = 0.05
+critical_value <- qnorm(1 - 0.05 / 2)
+
+print(Z_A)
+print(Z_B)
+print(critical_value)
+
+
+```
+H0: Intervention had no effect
+Because Z_A < critical_value, we can not reject H0 for intervention A. However,
+Z_B > critical_value, so we can conclude that intervention B did have an effect.
+
+Problem 3c: centralized analysis
+```{r}
+library(lme4)
+
+data$Pickups_lag <- c(NA, head(data$Pickups, -1))
+Xt <- ifelse(data$Day %in% c("Mo", "Tu", "We", "Th", "Fr"), 1, 0) 
+
+model_centralized <- glmer(Pickups ~ log(Pickups_lag) + Treatment + Xt + sex + age + pets + siblings + (1 | pseudo_id),
+                           family = poisson, data = data)
+
+summary(model_centralized)
+
+```
+Problem 3d: similarities/differences
+Treatment B was not found to be significant in part c but it was in b.
+Treatment A (intercept) was found to be significant in part c but not in b.
+
